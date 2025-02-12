@@ -1,4 +1,4 @@
-AUTHORIZED_NODES = {"http://localhost:5000"}  # Contoh: ganti dengan daftar node yang terpercaya
+AUTHORIZED_NODES = {"http://localhost:5000", "http://localhost:5001", "http://localhost:5002"}  # Contoh: ganti dengan daftar node yang terpercaya
 
 def is_authorized(node_address):
     """

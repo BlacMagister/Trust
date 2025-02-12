@@ -1,9 +1,5 @@
 from eth_account import Account
-from eth_account.messages import encode_structured_data, SignableMessage
-from eth_typing import HexStr
-from eth_utils import keccak
-
-Account.enable_unaudited_hdwallet_features()
+from eth_account.messages import encode_defunct
 import secrets
 import json
 import os
@@ -13,6 +9,8 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.backends import default_backend
 import binascii
+
+Account.enable_unaudited_hdwallet_features()
 
 class Wallet:
     def __init__(self, mnemonic=None):
@@ -29,14 +27,15 @@ class Wallet:
             self.account, self.mnemonic = Account.create_with_mnemonic(language='english')
             self.address = self.account.address
 
-    def sign_transaction(self, transaction):
-        """Menandatangani transaksi."""
-        #signed_txn = self.account.sign_transaction(transaction)
-
-        # Buat pesan yang akan ditandatangani
-        message = SignableMessage(HexStr(binascii.hexlify(transaction).decode('ascii')).encode('utf-8'))
+    def sign_transaction(self, message):
+        """Menandatangani pesan (bukan transaksi mentah)."""
+        # Jika message berupa bytes, ubah ke string
+        if isinstance(message, bytes):
+            message = message.decode('utf-8')
+        # Bungkus pesan menggunakan encode_defunct (EIP-191)
+        signable_message = encode_defunct(text=message)
         # Tanda tangani pesan
-        signed_txn = self.account.sign_message(message)
+        signed_txn = self.account.sign_message(signable_message)
         return signed_txn
 
     def verify_transaction(self, signed_transaction):
@@ -126,7 +125,7 @@ if __name__ == '__main__':
     else:
         print("Failed to load wallet!")
 
-    # Pastikan alamat tujuan transaksi valid (harus 0x diikuti 40 karakter hexadecimal)
+    # Contoh pesan yang akan ditandatangani
     message = "Hello"
 
     try:

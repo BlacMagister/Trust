@@ -1,5 +1,5 @@
 from eth_account import Account
-Account.enable_unaudited_hdwallet_features()  # Tambahin baris ini
+Account.enable_unaudited_hdwallet_features()
 import secrets
 import json
 import os
@@ -133,13 +133,16 @@ if __name__ == '__main__':
     else:
         print("Failed to load wallet!")
 
-    # Contoh transaksi
+    # Contoh transaksi (DIUBAH)
     transaction = {
-        'nonce': 0,
-        'gasPrice': 20000000000,
-        'gas': 100000,
-        'to': '0xd3CdA947B93c4E1CD4989DD08eAB4Cc9984',
-        'value': 1000000000
+        'to': '0xd3CdA947B93c4E1CD4989DD08eAB4Cc9984F',  # Alamat tujuan
+        'value': 1000000000,  # Nilai transaksi (dalam Wei)
+        'gas': 21000,  # Batas gas
+        'gasPrice': 1000000000  # Harga gas
     }
-    signed_txn = wallet.sign_transaction(transaction)
-    print(f"Signed transaction: {signed_txn}")
+
+    try:
+        signed_txn = wallet.sign_transaction(transaction)
+        print(f"Signed transaction: {signed_txn}")
+    except Exception as e:
+        print(f"Error signing transaction: {e}")

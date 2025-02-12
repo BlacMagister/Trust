@@ -135,6 +135,7 @@ if __name__ == '__main__':
 
     # Contoh transaksi (DIUBAH)
     transaction = {
+        'nonce': 0,  # Tambahkan nonce
         'to': '0xd3CdA947B93c4E1CD4989DD08eAB4Cc9984F',  # Alamat tujuan
         'value': 1000000000,  # Nilai transaksi (dalam Wei)
         'gas': 21000,  # Batas gas

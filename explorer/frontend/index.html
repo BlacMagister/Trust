@@ -1,33 +1,81 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>ChainKopi Explorer</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ChainKopi Explorer</title>
+  <!-- Bootstrap CSS -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+  <style>
+    body {
+      background-color: #f8f9fa;
+      padding: 20px;
+    }
+    .block-card {
+      margin-bottom: 20px;
+    }
+    .card-title {
+      font-weight: bold;
+    }
+  </style>
 </head>
 <body>
-    <h1>ChainKopi Explorer</h1>
-    <div id="blocks">
+  <div class="container">
+    <h1 class="text-center mb-4">ChainKopi Explorer</h1>
+    <div id="blocks" class="row">
+      <!-- Data block akan ditampilkan di sini -->
     </div>
+  </div>
 
-    <script>
-        async function fetchBlocks() {
-            const response = await fetch('http://206.189.44.12:5001/blocks');
-            const blocks = await response.json();
-
-            const blocksDiv = document.getElementById('blocks');
-            blocks.forEach(block => {
-                const blockDiv = document.createElement('div');
-                blockDiv.innerHTML = `
-                    <h2>Block #${block.index}</h2>
-                    <p>Timestamp: ${block.timestamp}</p>
-                    <p>Hash: ${block.hash}</p>
-                    <p>Previous Hash: ${block.previous_hash}</p>
-                    <p>Transactions: ${block.transactions}</p>
-                `;
-                blocksDiv.appendChild(blockDiv);
-            });
+  <script>
+    async function fetchBlocks() {
+      try {
+        const response = await fetch('http://206.189.44.12:5001/blocks');
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
         }
+        const data = await response.json();
+        const blocks = data.chain || [];
+        const blocksDiv = document.getElementById('blocks');
+        blocksDiv.innerHTML = ''; // Kosongkan konten sebelumnya
 
-        fetchBlocks();
-    </script>
+        blocks.forEach(block => {
+          // Buat kolom untuk grid Bootstrap
+          const colDiv = document.createElement('div');
+          colDiv.className = 'col-md-6';
+
+          // Buat kartu untuk menampilkan data block
+          const card = document.createElement('div');
+          card.className = 'card block-card shadow-sm';
+          card.innerHTML = `
+            <div class="card-body">
+              <h5 class="card-title">Block #${block.index}</h5>
+              <p class="card-text"><strong>Timestamp:</strong> ${new Date(block.timestamp * 1000).toLocaleString()}</p>
+              <p class="card-text"><strong>Hash:</strong> ${block.hash}</p>
+              <p class="card-text"><strong>Previous Hash:</strong> ${block.previous_hash}</p>
+              <p class="card-text"><strong>Transactions:</strong> ${JSON.stringify(block.transactions)}</p>
+            </div>
+          `;
+          colDiv.appendChild(card);
+          blocksDiv.appendChild(colDiv);
+        });
+      } catch (error) {
+        console.error('Error fetching blocks:', error);
+        const blocksDiv = document.getElementById('blocks');
+        blocksDiv.innerHTML = `
+          <div class="alert alert-danger" role="alert">
+            Error fetching blocks: ${error.message}
+          </div>
+        `;
+      }
+    }
+
+    // Ambil data block pertama kali dan refresh setiap 10 detik
+    fetchBlocks();
+    setInterval(fetchBlocks, 10000);
+  </script>
+
+  <!-- Bootstrap Bundle dengan Popper -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>

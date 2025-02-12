@@ -1,5 +1,4 @@
 from eth_account import Account
-from eth_account.hdaccount import generate_account, derive_account
 import secrets
 import json
 import os

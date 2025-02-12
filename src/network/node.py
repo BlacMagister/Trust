@@ -55,7 +55,7 @@ def resolve_conflicts():
                     candidate_chain.append(block)
                 # Cek apakah candidate chain lebih panjang dan valid
                 # Asumsi: metode is_chain_valid dapat menerima chain sebagai parameter (sesuaikan jika perlu)
-                if length > max_length and blockchain.is_chain_valid(chain=candidate_chain):
+                if length > max_length and blockchain.is_chain_valid(chain=candidate_chain,blockchain = blockchain):
                     max_length = length
                     longest_chain = candidate_chain
         except requests.exceptions.RequestException as e:
@@ -119,6 +119,7 @@ def mine():
         for node in peers:
             try:
                 requests.post(f"{node}/receive_block", json=block_data)
+                app.logger.info(f"Block sent to node {node}: {block_data}") #Log pengiriman blok
             except requests.exceptions.RequestException as e:
                 app.logger.error(f"Error broadcasting block to node {node}: {e}")
         return jsonify({"message": "New block mined", "block": block_data}), 200
@@ -131,6 +132,7 @@ def receive_block():
     Menerima blok baru dari node lain.
     """
     block_data = request.get_json()
+    app.logger.info(f"Received block data: {block_data}") #Log data yg diterima
     block = Block(
         block_data.get('index'),
         block_data.get('timestamp'),

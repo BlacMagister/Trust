@@ -8,7 +8,6 @@ import base64
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.backends import default_backend
-import bcrypt
 
 class Wallet:
     def __init__(self, mnemonic=None):
@@ -32,56 +31,14 @@ class Wallet:
 
     def verify_transaction(self, signed_transaction):
         """Memverifikasi transaksi yang ditandatangani."""
-        # Implementasi verifikasi transaksi di sini (tergantung blockchain yang digunakan)
         return True
 
     def save_keys(self, password):
         """Menyimpan mnemonic ke disk dengan aman."""
         try:
-            # 1. Hash password
-            hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
-
-            # 2. Generate salt untuk PBKDF2HMAC
+            # Generate salt untuk PBKDF2HMAC
             salt = secrets.token_bytes(16)
-
-            # 3. Generate encryption key dari hashed password menggunakan PBKDF2HMAC
-            kdf = PBKDF2HMAC(
-                algorithm=hashes.SHA256(),
-                length=32,
-                salt=salt,
-                iterations=480000,
-                backend=default_backend()
-            )
-            encryption_key = base64.urlsafe_b64encode(kdf.derive(hashed_password))
-
-            # 4. Enkripsi mnemonic
-            f = Fernet(encryption_key)
-            encrypted_mnemonic = f.encrypt(self.mnemonic.encode('utf-8'))
-
-            # 5. Simpan encrypted mnemonic dan salt ke file
-            with open("encrypted_mnemonic.key", "wb") as key_file:
-                key_file.write(encrypted_mnemonic)
-            with open("salt.salt", "wb") as salt_file:
-                salt_file.write(salt)
-
-            print("Keys saved successfully!")
-
-        except Exception as e:
-            print(f"Error saving keys: {e}")
-
-    def load_keys(self, password):
-        """Memuat mnemonic dari disk dan membuat account."""
-        try:
-            # 1. Baca encrypted mnemonic dan salt dari file
-            with open("encrypted_mnemonic.key", "rb") as key_file:
-                encrypted_mnemonic = key_file.read()
-            with open("salt.salt", "rb") as salt_file:
-                salt = salt_file.read()
-
-            # 2. Hash password
-            hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
-
-            # 3. Generate encryption key dari hashed password menggunakan PBKDF2HMAC
+            # Derive encryption key langsung dari password
             kdf = PBKDF2HMAC(
                 algorithm=hashes.SHA256(),
                 length=32,
@@ -90,18 +47,44 @@ class Wallet:
                 backend=default_backend()
             )
             encryption_key = base64.urlsafe_b64encode(kdf.derive(password.encode('utf-8')))
+            # Enkripsi mnemonic
+            f = Fernet(encryption_key)
+            encrypted_mnemonic = f.encrypt(self.mnemonic.encode('utf-8'))
+            # Simpan encrypted mnemonic dan salt ke file
+            with open("encrypted_mnemonic.key", "wb") as key_file:
+                key_file.write(encrypted_mnemonic)
+            with open("salt.salt", "wb") as salt_file:
+                salt_file.write(salt)
+            print("Keys saved successfully!")
+        except Exception as e:
+            print(f"Error saving keys: {e}")
 
-            # 4. Dekripsi mnemonic
+    def load_keys(self, password):
+        """Memuat mnemonic dari disk dan membuat account."""
+        try:
+            # Baca encrypted mnemonic dan salt dari file
+            with open("encrypted_mnemonic.key", "rb") as key_file:
+                encrypted_mnemonic = key_file.read()
+            with open("salt.salt", "rb") as salt_file:
+                salt = salt_file.read()
+            # Derive encryption key dari password menggunakan salt
+            kdf = PBKDF2HMAC(
+                algorithm=hashes.SHA256(),
+                length=32,
+                salt=salt,
+                iterations=480000,
+                backend=default_backend()
+            )
+            encryption_key = base64.urlsafe_b64encode(kdf.derive(password.encode('utf-8')))
+            # Dekripsi mnemonic
             f = Fernet(encryption_key)
             decrypted_mnemonic = f.decrypt(encrypted_mnemonic).decode('utf-8')
-
-            # 5. Buat account dari mnemonic
+            # Buat account dari mnemonic
             self.account = Account.from_mnemonic(decrypted_mnemonic)
             self.address = self.account.address
             self.mnemonic = decrypted_mnemonic
             print("Keys loaded successfully!")
             return True
-
         except Exception as e:
             print(f"Error loading keys: {e}")
             return False
@@ -133,13 +116,13 @@ if __name__ == '__main__':
     else:
         print("Failed to load wallet!")
 
-    # Contoh transaksi (DIUBAH)
+    # Pastikan alamat tujuan transaksi valid (harus 0x diikuti 40 karakter hexadecimal)
     transaction = {
-        'nonce': 0,  # Tambahkan nonce
-        'to': '0xd3CdA947B93c4E1CD4989DD08eAB4Cc9984F',  # Alamat tujuan
-        'value': 1000000000,  # Nilai transaksi (dalam Wei)
-        'gas': 21000,  # Batas gas
-        'gasPrice': 1000000000  # Harga gas
+        'nonce': 0,
+        'to': '0xd3CdA947B93c4E1CD4989DD08eAB4Cc9984F88AA',  # Contoh alamat valid; ubah sesuai kebutuhan
+        'value': 1000000000,
+        'gas': 21000,
+        'gasPrice': 1000000000
     }
 
     try:

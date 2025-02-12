@@ -21,7 +21,6 @@ from cryptography.fernet import Fernet
 # Secret key untuk enkripsi pesan antar node (harus sama di seluruh node)
 SECRET_KEY = os.getenv("NODE_SECRET_KEY")
 if not SECRET_KEY:
-    # Jika tidak di-set, generate key baru dan log warning (hindari mencetak secret untuk production)
     SECRET_KEY = Fernet.generate_key().decode('utf-8')
     logger.warning("NODE_SECRET_KEY tidak di-set. Menggunakan key yang digenerate: %s", SECRET_KEY)
 SECRET_KEY = SECRET_KEY.encode('utf-8')
@@ -59,6 +58,9 @@ NODE_REGISTRATION_SECRET = os.getenv("NODE_REGISTRATION_SECRET")
 if not NODE_REGISTRATION_SECRET:
     NODE_REGISTRATION_SECRET = secrets.token_hex(16)
     logger.warning("NODE_REGISTRATION_SECRET tidak di-set. Menggunakan secret yang digenerate: %s", NODE_REGISTRATION_SECRET)
+
+# (Opsional: Untuk debugging, tampilkan node_secret. Jangan lakukan ini di production.)
+logger.info("NODE_REGISTRATION_SECRET: %s", NODE_REGISTRATION_SECRET)
 
 # Import komponen blockchain
 from src.blockchain.chain import Blockchain
@@ -223,9 +225,13 @@ def register_node():
     node_address = data.get("node_address")
     node_secret = data.get("node_secret")
     
-    # Gunakan secret yang sudah digenerate atau di-set saat startup
-    if not node_address or not node_secret or node_secret != NODE_REGISTRATION_SECRET:
-        return jsonify({"error": "Invalid data atau node_secret tidak valid"}), 400
+    # Validasi payload
+    if not node_address or not node_secret:
+        return jsonify({"error": "node_address dan node_secret harus disediakan"}), 400
+    
+    if node_secret != NODE_REGISTRATION_SECRET:
+        return jsonify({"error": "node_secret tidak valid"}), 400
+    
     peers.add(node_address)
     logger.info("Node %s berhasil didaftarkan.", node_address)
     return jsonify({'message': 'Node added', 'peers': list(peers)}), 201

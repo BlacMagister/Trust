@@ -10,7 +10,7 @@
 
     <script>
         async function fetchBlocks() {
-            const response = await fetch('http://localhost:5001/blocks');
+            const response = await fetch('http://206.189.44.12:5001/blocks');
             const blocks = await response.json();
 
             const blocksDiv = document.getElementById('blocks');

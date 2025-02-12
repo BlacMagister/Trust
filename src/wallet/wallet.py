@@ -21,8 +21,7 @@ class Wallet:
             self.mnemonic = mnemonic
         else:
             # Buat wallet baru
-            self.mnemonic = Account.create_mnemonic(language='english')
-            self.account = Account.from_mnemonic(self.mnemonic)
+            self.account, self.mnemonic = Account.create_with_mnemonic(language='english')
             self.address = self.account.address
 
     def sign_transaction(self, transaction):

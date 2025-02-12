@@ -5,28 +5,27 @@ import threading
 import requests
 import logging
 import re
+import secrets
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from typing import List, Union, Dict
-from urllib.parse import urlparse
+from typing import List, Union, Dict, Any
 
 # Konfigurasi logging yang fleksibel via environment variable
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO))
 logger = logging.getLogger(__name__)
 
-# Secret key untuk enkripsi pesan antar node (harus sama di seluruh node)
+# --- Pengaturan Secret Key untuk Enkripsi Pesan ---
 from cryptography.fernet import Fernet
+
+# Secret key untuk enkripsi pesan antar node (harus sama di seluruh node)
 SECRET_KEY = os.getenv("NODE_SECRET_KEY")
 if not SECRET_KEY:
-    logger.critical("NODE_SECRET_KEY tidak di-set. Aplikasi akan dihentikan.")
-    raise ValueError("NODE_SECRET_KEY harus di-set.")
-try:
-    SECRET_KEY = SECRET_KEY.encode('utf-8')
-    fernet = Fernet(SECRET_KEY)
-except Exception as e:
-    logger.critical("NODE_SECRET_KEY tidak valid: %s", str(e))
-    raise ValueError("NODE_SECRET_KEY tidak valid.")
+    # Jika tidak di-set, generate key baru dan log warning (hindari mencetak secret untuk production)
+    SECRET_KEY = Fernet.generate_key().decode('utf-8')
+    logger.warning("NODE_SECRET_KEY tidak di-set. Menggunakan key yang digenerate: %s", SECRET_KEY)
+SECRET_KEY = SECRET_KEY.encode('utf-8')
+fernet = Fernet(SECRET_KEY)
 
 def encrypt_data(data: dict) -> str:
     """Meng-enkripsi payload JSON menjadi string terenkripsi."""
@@ -35,12 +34,8 @@ def encrypt_data(data: dict) -> str:
 
 def decrypt_data(encrypted_text: str) -> dict:
     """Mendekripsi string terenkripsi kembali ke dictionary."""
-    try:
-        decrypted = fernet.decrypt(encrypted_text.encode('utf-8')).decode('utf-8')
-        return json.loads(decrypted)
-    except Exception as e:
-        logger.error("Gagal mendekripsi data: %s", str(e))
-        return None
+    decrypted = fernet.decrypt(encrypted_text.encode('utf-8')).decode('utf-8')
+    return json.loads(decrypted)
 
 def get_request_data() -> Union[dict, None]:
     """
@@ -51,14 +46,19 @@ def get_request_data() -> Union[dict, None]:
         encrypted_payload = request.get_data(as_text=True)
         try:
             data = decrypt_data(encrypted_payload)
-            if data is None:
-                raise ValueError("Gagal mendekripsi payload")
-            return data
         except Exception as e:
             logger.error("Gagal mendekripsi payload: %s", str(e))
             return None
+        return data
     else:
         return request.get_json()
+
+# --- Pengaturan Node Registration Secret ---
+# Jika NODE_REGISTRATION_SECRET tidak di-set, generate secret unik
+NODE_REGISTRATION_SECRET = os.getenv("NODE_REGISTRATION_SECRET")
+if not NODE_REGISTRATION_SECRET:
+    NODE_REGISTRATION_SECRET = secrets.token_hex(16)
+    logger.warning("NODE_REGISTRATION_SECRET tidak di-set. Menggunakan secret yang digenerate: %s", NODE_REGISTRATION_SECRET)
 
 # Import komponen blockchain
 from src.blockchain.chain import Blockchain
@@ -69,7 +69,7 @@ app = Flask(__name__)
 CORS(app)
 
 # Daftar node (peers) dalam jaringan
-peers = set()
+peers: set[str] = set()
 
 # Inisialisasi blockchain
 blockchain = Blockchain()
@@ -94,9 +94,6 @@ def resolve_conflicts() -> bool:
             resp = requests.get(f"{node}/chain", headers={"X-Encrypted": "true"})
             if resp.status_code == 200:
                 data = decrypt_data(resp.text) if resp.headers.get("X-Encrypted", "").lower() == "true" else resp.json()
-                if data is None:
-                    logger.warning("Gagal mendekripsi chain dari node %s", node)
-                    continue  # Lewati node ini jika dekripsi gagal
                 length = data.get('length', 0)
                 chain_data = data.get('chain', [])
                 candidate_chain = []
@@ -141,7 +138,6 @@ def new_transaction():
     for node in peers:
         try:
             requests.post(f"{node}/receive_transaction", data=encrypted_msg, headers={"X-Encrypted": "true"})
-            logger.info("Transaction broadcasted to node %s", node)
         except requests.exceptions.RequestException as e:
             app.logger.error("Error broadcasting to node %s: %s", node, str(e))
     return jsonify({"message": "Transaction submitted successfully"}), 201
@@ -154,7 +150,6 @@ def receive_transaction():
     tx_data = get_request_data()
     if tx_data is None:
         return jsonify({"error": "Payload tidak valid atau gagal didekripsi"}), 400
-    # Misalkan payload node-to-node dibungkus sebagai {"message": <JSON string>}
     try:
         inner = json.loads(tx_data.get("message", "{}"))
     except Exception as e:
@@ -214,38 +209,25 @@ def receive_block():
         else:
             return jsonify({"error": "Invalid block"}), 400
 
-def is_valid_url(url):
-    """
-    Memvalidasi apakah string adalah URL yang valid.
-    """
-    try:
-        result = urlparse(url)
-        return all([result.scheme, result.netloc])
-    except:
-        return False
-
 @app.route('/register', methods=['POST'])
 def register_node():
     """
     Mendaftarkan node baru ke dalam jaringan.
     Mencegah serangan Sybil dengan memerlukan 'node_secret' yang valid.
+    
+    Klien harus mengirimkan JSON dengan:
+      - node_address: Alamat node (contoh: http://localhost:5001)
+      - node_secret: Secret key yang harus sama dengan secret yang tersimpan di node ini.
     """
     data = request.get_json()
     node_address = data.get("node_address")
     node_secret = data.get("node_secret")
-    expected_secret = os.getenv("NODE_REGISTRATION_SECRET")
-
-    if not node_address or not node_secret:
-        return jsonify({"error": "Data tidak lengkap: node_address dan node_secret diperlukan"}), 400
-
-    if not is_valid_url(node_address):
-        return jsonify({"error": "node_address tidak valid: format URL salah"}), 400
-
-    if node_secret != expected_secret:
-        return jsonify({"error": "node_secret tidak valid"}), 403
-
+    
+    # Gunakan secret yang sudah digenerate atau di-set saat startup
+    if not node_address or not node_secret or node_secret != NODE_REGISTRATION_SECRET:
+        return jsonify({"error": "Invalid data atau node_secret tidak valid"}), 400
     peers.add(node_address)
-    logger.info("Node %s ditambahkan ke daftar peer", node_address)
+    logger.info("Node %s berhasil didaftarkan.", node_address)
     return jsonify({'message': 'Node added', 'peers': list(peers)}), 201
 
 @app.route('/discover', methods=['GET'])
@@ -257,7 +239,7 @@ def discover():
     return jsonify({'peers': list(peers)}), 200
 
 @app.route('/chain', methods=['GET'])
-def get_chain():
+def get_chain_endpoint():
     """
     Mengembalikan seluruh chain blockchain.
     Pesan dikirim dalam bentuk terenkripsi ke node yang meminta.
@@ -282,7 +264,7 @@ def consensus():
 def index():
     return "ChainKopi Node is running!", 200
 
-def start_node(port=DEFAULT_PORT):
+def start_node(port: int = DEFAULT_PORT):
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
 
 if __name__ == '__main__':

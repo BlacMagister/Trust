@@ -1,1 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>ChainKopi Explorer</title>
+</head>
+<body>
+    <h1>ChainKopi Explorer</h1>
+    <div id="blocks">
+    </div>
 
+    <script>
+        async function fetchBlocks() {
+            const response = await fetch('http://localhost:5001/blocks');
+            const blocks = await response.json();
+
+            const blocksDiv = document.getElementById('blocks');
+            blocks.forEach(block => {
+                const blockDiv = document.createElement('div');
+                blockDiv.innerHTML = `
+                    <h2>Block #${block.index}</h2>
+                    <p>Timestamp: ${block.timestamp}</p>
+                    <p>Hash: ${block.hash}</p>
+                    <p>Previous Hash: ${block.previous_hash}</p>
+                    <p>Transactions: ${block.transactions}</p>
+                `;
+                blocksDiv.appendChild(blockDiv);
+            });
+        }
+
+        fetchBlocks();
+    </script>
+</body>
+</html>

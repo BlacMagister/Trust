@@ -3,6 +3,7 @@ import time
 import secrets
 import json
 import logging
+import re
 from typing import List, Union, Dict
 
 # Konfigurasi logging yang fleksibel via environment variable
@@ -10,45 +11,61 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO))
 logger = logging.getLogger(__name__)
 
-# Untuk verifikasi tanda tangan digital
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives import serialization, hashes
-from cryptography.exceptions import InvalidSignature
+# Import untuk verifikasi tanda tangan Ethereum
+from eth_account import Account
+from eth_account.messages import encode_defunct
 
-# Asumsikan Block dan create_genesis_block diimport dari modul lain.
+# Asumsikan Block dan create_genesis_block diimpor dari modul lain.
 from src.blockchain.block import Block, create_genesis_block
 from src.blockchain.consensus import validate_block
 
+def is_valid_address(address: str) -> bool:
+    """
+    Validasi alamat Ethereum.
+    Alamat harus berupa string, diawali "0x", panjang 42 karakter, dan merupakan nilai hexadecimal.
+    """
+    if isinstance(address, str) and address.startswith("0x") and len(address) == 42:
+        try:
+            int(address[2:], 16)
+            return True
+        except ValueError:
+            return False
+    return False
+
 def get_transaction_message(transaction: Dict) -> bytes:
     """
-    Menghasilkan pesan (dalam bentuk bytes) dari transaksi dengan mengeluarkan field signature dan public_key.
+    Menghasilkan pesan (dalam bentuk bytes) dari transaksi dengan mengeluarkan field signature.
     Urutan kunci dijaga dengan sort_keys=True agar konsisten.
     """
     tx_copy = transaction.copy()
     tx_copy.pop("signature", None)
-    tx_copy.pop("public_key", None)
     return json.dumps(tx_copy, sort_keys=True).encode('utf-8')
 
-def verify_digital_signature(public_key_str: str, signature_hex: str, message: bytes) -> bool:
+def verify_eth_signature(transaction: Dict) -> bool:
     """
-    Memverifikasi tanda tangan digital menggunakan ECDSA dengan SHA256.
+    Memverifikasi tanda tangan digital transaksi menggunakan eth_account.
+    
+    Proses:
+      - Menghasilkan pesan transaksi (tanpa field signature).
+      - Meng-encode pesan tersebut dengan encode_defunct().
+      - Meng-recover alamat dari tanda tangan.
+      - Membandingkan alamat yang direcover dengan field sender.
     
     Args:
-        public_key_str (str): Public key dalam format PEM (string).
-        signature_hex (str): Tanda tangan dalam format hex.
-        message (bytes): Pesan yang ditandatangani.
+        transaction (dict): Transaksi yang akan diverifikasi.
         
     Returns:
         bool: True jika verifikasi berhasil, False jika tidak.
     """
     try:
-        public_key = serialization.load_pem_public_key(public_key_str.encode('utf-8'))
-        signature = bytes.fromhex(signature_hex)
-        public_key.verify(signature, message, ec.ECDSA(hashes.SHA256()))
-        return True
-    except InvalidSignature:
-        logger.error("Tanda tangan digital tidak valid.")
-        return False
+        message = get_transaction_message(transaction)
+        encoded_msg = encode_defunct(message)
+        recovered_addr = Account.recover_message(encoded_msg, signature=transaction["signature"])
+        if recovered_addr.lower() == transaction["sender"].lower():
+            return True
+        else:
+            logger.error("Alamat yang direcover (%s) tidak cocok dengan sender (%s).", recovered_addr, transaction["sender"])
+            return False
     except Exception as e:
         logger.error("Error saat verifikasi tanda tangan: %s", str(e))
         return False
@@ -68,7 +85,7 @@ class Blockchain:
     def validate_transaction(self, transaction: Dict) -> bool:
         """
         Validasi struktur dan isi transaksi sebelum ditambahkan ke blockchain.
-        Termasuk verifikasi tanda tangan digital.
+        Termasuk validasi alamat dan verifikasi tanda tangan digital.
         
         Args:
             transaction (dict): Transaksi yang akan divalidasi.
@@ -76,18 +93,27 @@ class Blockchain:
         Returns:
             bool: True jika transaksi valid, False jika tidak.
         """
-        required_keys = ["sender", "recipient", "amount", "signature", "public_key"]
+        required_keys = ["sender", "recipient", "amount", "signature"]
         for key in required_keys:
             if key not in transaction:
                 logger.error("Validasi transaksi gagal: kunci '%s' tidak ditemukan.", key)
                 return False
+
+        # Validasi alamat pengirim dan penerima
+        if not is_valid_address(transaction["sender"]):
+            logger.error("Alamat pengirim tidak valid: %s", transaction["sender"])
+            return False
+        if not is_valid_address(transaction["recipient"]):
+            logger.error("Alamat penerima tidak valid: %s", transaction["recipient"])
+            return False
+
+        # Validasi jumlah
         if not isinstance(transaction["amount"], (int, float)) or transaction["amount"] <= 0:
             logger.error("Validasi transaksi gagal: jumlah (%s) tidak valid.", transaction["amount"])
             return False
-        
-        # Verifikasi tanda tangan digital
-        message = get_transaction_message(transaction)
-        if not verify_digital_signature(transaction["public_key"], transaction["signature"], message):
+
+        # Verifikasi tanda tangan digital menggunakan eth_account
+        if not verify_eth_signature(transaction):
             logger.error("Validasi transaksi gagal: tanda tangan digital tidak valid.")
             return False
 
@@ -170,11 +196,11 @@ class Blockchain:
         mining_time = end_time - start_time
         logger.info("Blok %d ditambang dalam %.2f detik.", new_block.index, mining_time)
 
-        # Penyesuaian difficulty secara dinamis berdasarkan waktu mining
-        if mining_time < self.target_mine_time:
+        # Penyesuaian difficulty secara dinamis
+        if mining_time < self.target_mine_time * 0.9:
             self.difficulty += 1
             logger.info("Mining terlalu cepat (%.2f detik). Menaikkan difficulty ke %d.", mining_time, self.difficulty)
-        elif mining_time > self.target_mine_time and self.difficulty > 1:
+        elif mining_time > self.target_mine_time * 1.1 and self.difficulty > 1:
             self.difficulty -= 1
             logger.info("Mining terlalu lambat (%.2f detik). Menurunkan difficulty ke %d.", mining_time, self.difficulty)
         else:
@@ -274,35 +300,30 @@ def run_tests():
     """
     Menjalankan test case untuk:
       - Transaksi valid dan tidak valid.
-      - Mining dengan difficulty berbeda.
-      - Percobaan corrupt chain.
+      - Mining dengan difficulty yang berbeda.
+      - Percobaan untuk corrupt chain.
     """
     logger.info("=== MEMULAI TEST CASE ===")
     blockchain = Blockchain()
 
     # Test 1: Transaksi valid
     valid_tx = {
-        "sender": "Alice",
-        "recipient": "Bob",
+        "sender": "0xAbC1234567890abcdef1234567890ABCDEF1234",
+        "recipient": "0xDef9876543210fedcba9876543210FEDCBA9876",
         "amount": 50.0,
-        # Misalnya public key dan signature dalam format PEM dan hex (contoh dummy)
-        "public_key": """-----BEGIN PUBLIC KEY-----
-MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEoP0xWJvjNTBXXqdz+2Eo74F0jKrG
-pzsvsW3tS0a/k+v9k9dXv0tE8S/7Ewun3bdB6LaPzMpc/mVPuMj/X7lWtw==
------END PUBLIC KEY-----""",
-        "signature": "3045022100dff9f1e8c6e4f7f9bd79f3d7a0ad8bcb53b73d0a6cda1a7fbd8c2e3d5a8e1c1e02206a1f1f3c4e3e8c1f2b1d7f3a0ad8bcb53b73d0a6cda1a7fbd8c2e3d5a8e1c1e"  # dummy hex string
+        # Contoh tanda tangan Ethereum dummy (hex string)
+        "signature": "0x3045022100dff9f1e8c6e4f7f9bd79f3d7a0ad8bcb53b73d0a6cda1a7fbd8c2e3d5a8e1c1e02206a1f1f3c4e3e8c1f2b1d7f3a0ad8bcb53b73d0a6cda1a7fbd8c2e3d5a8e1c1e"
     }
     if blockchain.add_new_transaction(valid_tx):
         logger.info("Test transaksi valid: PASSED")
     else:
         logger.error("Test transaksi valid: GAGAL")
 
-    # Test 2: Transaksi tidak valid (misal, field 'amount' negatif)
+    # Test 2: Transaksi tidak valid (misal, field 'amount' negatif atau alamat tidak valid)
     invalid_tx = {
-        "sender": "Charlie",
-        "recipient": "Dave",
+        "sender": "0xInvalidAddress",
+        "recipient": "0xDef9876543210fedcba9876543210FEDCBA9876",
         "amount": -10.0,
-        "public_key": valid_tx["public_key"],
         "signature": valid_tx["signature"]
     }
     if not blockchain.add_new_transaction(invalid_tx):
@@ -318,16 +339,18 @@ pzsvsW3tS0a/k+v9k9dXv0tE8S/7Ewun3bdB6LaPzMpc/mVPuMj/X7lWtw==
         logger.error("Test mining blok: GAGAL")
 
     # Test 4: Meng-corrupt chain dan memvalidasinya
-    if blockchain.chain:
-        # Corrupt blok kedua (jika ada)
-        if len(blockchain.chain) > 1:
-            blockchain.chain[1]._transactions.append({"sender": "Eve", "recipient": "Mallory", "amount": 100})
-            if not blockchain.is_chain_valid():
-                logger.info("Test corrupt chain: PASSED")
-            else:
-                logger.error("Test corrupt chain: GAGAL")
+    if len(blockchain.chain) > 1:
+        # Corrupt blok kedua
+        blockchain.chain[1]._transactions.append({"sender": "0xEve000000000000000000000000000000000000", 
+                                                    "recipient": "0xMallory00000000000000000000000000000000", 
+                                                    "amount": 100,
+                                                    "signature": valid_tx["signature"]})
+        if not blockchain.is_chain_valid():
+            logger.info("Test corrupt chain: PASSED")
         else:
-            logger.info("Tidak ada blok kedua untuk menguji corrupt chain.")
+            logger.error("Test corrupt chain: GAGAL")
+    else:
+        logger.info("Tidak ada blok kedua untuk menguji corrupt chain.")
 
     logger.info("=== TEST CASE SELESAI ===")
 

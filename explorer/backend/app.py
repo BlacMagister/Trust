@@ -1,7 +1,8 @@
-from flask import Flask, jsonify
+from flask import Flask, jsonify, send_from_directory
 from flask_cors import CORS
 from src.blockchain.block import Block, create_genesis_block
 import time
+import os
 
 class Blockchain:
     def __init__(self):
@@ -36,7 +37,7 @@ blockchain.add_block(new_block)
 new_block_2 = Block(2, time.time(), ["transaksi 3", "transaksi 4"], blockchain.chain[-1].hash)
 blockchain.add_block(new_block_2)
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder='../frontend') # Serve static files from frontend
 CORS(app)
 
 @app.route('/blocks', methods=['GET'])
@@ -61,5 +62,10 @@ def get_block(index):
     except IndexError:
         return jsonify({'error': 'Block not found'}), 404
 
+@app.route('/')
+def serve_index():
+    """Serve the main index.html file."""
+    return send_from_directory(app.static_folder, 'index.html')
+
 if __name__ == '__main__':
-    app.run(debug=True, port=5001)
+    app.run(debug=True, host='0.0.0.0', port=5001)

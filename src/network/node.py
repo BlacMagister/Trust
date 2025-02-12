@@ -9,15 +9,15 @@ from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 from typing import List, Union, Dict, Any
 
-# Konfigurasi logging yang fleksibel via environment variable
+# Konfigurasi logging via environment variable
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO))
 logger = logging.getLogger(__name__)
 
-# --- Pengaturan Enkripsi Pesan ---
+# --- Pengaturan Enkripsi Pesan Antar Node ---
 from cryptography.fernet import Fernet
 
-# Jika NODE_SECRET_KEY tidak diset, generate secara otomatis
+# Secret key untuk enkripsi pesan antar node (simetris)
 SECRET_KEY = os.getenv("NODE_SECRET_KEY")
 if not SECRET_KEY:
     SECRET_KEY = Fernet.generate_key().decode('utf-8')
@@ -25,21 +25,10 @@ if not SECRET_KEY:
 SECRET_KEY = SECRET_KEY.encode('utf-8')
 fernet = Fernet(SECRET_KEY)
 
-# Global untuk menyimpan nonce yang sudah digunakan untuk mencegah replay attack
-used_nonces = set()
-
-def add_nonce_to_payload(data: dict) -> dict:
-    """
-    Menambahkan nonce unik ke payload jika belum ada.
-    """
-    if "nonce" not in data:
-        data["nonce"] = secrets.token_hex(8)
-    return data
-
 def encrypt_data(data: dict) -> str:
     """
     Meng-enkripsi payload JSON menjadi string terenkripsi.
-    Secara otomatis menambahkan nonce untuk mencegah replay attack.
+    Secara otomatis menambahkan nonce untuk pencegahan replay attack.
     """
     data_with_nonce = add_nonce_to_payload(data)
     payload = json.dumps(data_with_nonce)
@@ -60,10 +49,19 @@ def decrypt_data(encrypted_text: str) -> dict:
     used_nonces.add(nonce)
     return data
 
+# Global untuk menyimpan nonce yang telah digunakan
+used_nonces = set()
+
+def add_nonce_to_payload(data: dict) -> dict:
+    """Menambahkan nonce unik ke payload jika belum ada."""
+    if "nonce" not in data:
+        data["nonce"] = secrets.token_hex(8)
+    return data
+
 def get_request_data() -> Union[dict, None]:
     """
-    Mengembalikan data request. Jika header 'X-Encrypted' diset ke true,
-    data didekripsi terlebih dahulu dan divalidasi.
+    Mengembalikan data request.
+    Jika header 'X-Encrypted' diset ke true, payload didekripsi dan divalidasi.
     """
     if request.headers.get("X-Encrypted", "").lower() == "true":
         encrypted_payload = request.get_data(as_text=True)
@@ -77,25 +75,28 @@ def get_request_data() -> Union[dict, None]:
         return request.get_json()
 
 # --- Pengaturan Node Registration Secret ---
-# Jika NODE_REGISTRATION_SECRET tidak diset, generate secret secara otomatis
+# Pastikan NODE_REGISTRATION_SECRET konsisten di seluruh node.
+secret_file = "node_secret.txt"
 NODE_REGISTRATION_SECRET = os.getenv("NODE_REGISTRATION_SECRET")
 if not NODE_REGISTRATION_SECRET:
-    NODE_REGISTRATION_SECRET = secrets.token_hex(16)
-    logger.warning("NODE_REGISTRATION_SECRET tidak di-set. Menggunakan secret yang digenerate: %s", NODE_REGISTRATION_SECRET)
+    if os.path.exists(secret_file):
+        with open(secret_file, "r") as f:
+            NODE_REGISTRATION_SECRET = f.read().strip()
+    else:
+        NODE_REGISTRATION_SECRET = secrets.token_hex(16)
+        with open(secret_file, "w") as f:
+            f.write(NODE_REGISTRATION_SECRET)
+        logger.warning("NODE_REGISTRATION_SECRET tidak di-set. Generated and saved secret: %s", NODE_REGISTRATION_SECRET)
 logger.info("NODE_REGISTRATION_SECRET: %s", NODE_REGISTRATION_SECRET)
 
 # --- Fungsi untuk Mengambil Data Blockchain ---
 def get_blockchain_data() -> Dict[str, Any]:
-    """
-    Mengambil data blockchain dalam bentuk dictionary.
-    """
+    """Mengambil data blockchain dalam bentuk dictionary."""
     chain_data = [block.__dict__ for block in blockchain.chain]
     return {"length": len(chain_data), "chain": chain_data}
 
 def get_encrypted_response(data: dict) -> Response:
-    """
-    Mengembalikan Response JSON terenkripsi dari data yang diberikan.
-    """
+    """Mengembalikan Response terenkripsi dari data yang diberikan."""
     encrypted_payload = encrypt_data(data)
     return Response(encrypted_payload, status=200, mimetype="text/plain", headers={"X-Encrypted": "true"})
 

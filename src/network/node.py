@@ -5,7 +5,7 @@ import threading
 import requests
 import logging
 import secrets
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 from typing import List, Union, Dict, Any
 
@@ -14,10 +14,10 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO))
 logger = logging.getLogger(__name__)
 
-# --- Pengaturan Secret Key untuk Enkripsi Pesan Antar Node ---
+# --- Pengaturan Enkripsi Pesan ---
 from cryptography.fernet import Fernet
 
-# Secret key untuk enkripsi pesan antar node; jika tidak diset, generate secara otomatis.
+# Jika NODE_SECRET_KEY tidak diset, generate secara otomatis
 SECRET_KEY = os.getenv("NODE_SECRET_KEY")
 if not SECRET_KEY:
     SECRET_KEY = Fernet.generate_key().decode('utf-8')
@@ -25,43 +25,81 @@ if not SECRET_KEY:
 SECRET_KEY = SECRET_KEY.encode('utf-8')
 fernet = Fernet(SECRET_KEY)
 
+# Global untuk menyimpan nonce yang sudah digunakan untuk mencegah replay attack
+used_nonces = set()
+
+def add_nonce_to_payload(data: dict) -> dict:
+    """
+    Menambahkan nonce unik ke payload jika belum ada.
+    """
+    if "nonce" not in data:
+        data["nonce"] = secrets.token_hex(8)
+    return data
+
 def encrypt_data(data: dict) -> str:
-    """Meng-enkripsi payload JSON menjadi string terenkripsi."""
-    payload = json.dumps(data)
+    """
+    Meng-enkripsi payload JSON menjadi string terenkripsi.
+    Secara otomatis menambahkan nonce untuk mencegah replay attack.
+    """
+    data_with_nonce = add_nonce_to_payload(data)
+    payload = json.dumps(data_with_nonce)
     return fernet.encrypt(payload.encode('utf-8')).decode('utf-8')
 
 def decrypt_data(encrypted_text: str) -> dict:
-    """Mendekripsi string terenkripsi kembali ke dictionary."""
+    """
+    Mendekripsi string terenkripsi kembali ke dictionary.
+    Memvalidasi bahwa nonce belum pernah digunakan sebelumnya.
+    """
     decrypted = fernet.decrypt(encrypted_text.encode('utf-8')).decode('utf-8')
-    return json.loads(decrypted)
+    data = json.loads(decrypted)
+    nonce = data.get("nonce")
+    if not nonce:
+        raise ValueError("Nonce tidak ditemukan dalam payload.")
+    if nonce in used_nonces:
+        raise ValueError("Payload dengan nonce ini sudah pernah digunakan (replay attack).")
+    used_nonces.add(nonce)
+    return data
 
 def get_request_data() -> Union[dict, None]:
     """
     Mengembalikan data request. Jika header 'X-Encrypted' diset ke true,
-    data didekripsi terlebih dahulu.
+    data didekripsi terlebih dahulu dan divalidasi.
     """
     if request.headers.get("X-Encrypted", "").lower() == "true":
         encrypted_payload = request.get_data(as_text=True)
         try:
             data = decrypt_data(encrypted_payload)
         except Exception as e:
-            logger.error("Gagal mendekripsi payload: %s", str(e))
+            logger.error("Gagal mendekripsi atau memvalidasi payload: %s", str(e))
             return None
         return data
     else:
         return request.get_json()
 
 # --- Pengaturan Node Registration Secret ---
-# Jika NODE_REGISTRATION_SECRET tidak di-set, generate secret unik secara otomatis.
+# Jika NODE_REGISTRATION_SECRET tidak diset, generate secret secara otomatis
 NODE_REGISTRATION_SECRET = os.getenv("NODE_REGISTRATION_SECRET")
 if not NODE_REGISTRATION_SECRET:
     NODE_REGISTRATION_SECRET = secrets.token_hex(16)
     logger.warning("NODE_REGISTRATION_SECRET tidak di-set. Menggunakan secret yang digenerate: %s", NODE_REGISTRATION_SECRET)
-
-# (Untuk kemudahan, kita akan menggunakan secret yang sama jika tidak disediakan oleh klien.)
 logger.info("NODE_REGISTRATION_SECRET: %s", NODE_REGISTRATION_SECRET)
 
-# Import komponen blockchain
+# --- Fungsi untuk Mengambil Data Blockchain ---
+def get_blockchain_data() -> Dict[str, Any]:
+    """
+    Mengambil data blockchain dalam bentuk dictionary.
+    """
+    chain_data = [block.__dict__ for block in blockchain.chain]
+    return {"length": len(chain_data), "chain": chain_data}
+
+def get_encrypted_response(data: dict) -> Response:
+    """
+    Mengembalikan Response JSON terenkripsi dari data yang diberikan.
+    """
+    encrypted_payload = encrypt_data(data)
+    return Response(encrypted_payload, status=200, mimetype="text/plain", headers={"X-Encrypted": "true"})
+
+# --- Import komponen blockchain ---
 from src.blockchain.chain import Blockchain
 from src.blockchain.block import Block, create_genesis_block
 from src.network.message import Message
@@ -91,7 +129,6 @@ def resolve_conflicts() -> bool:
 
     for node in peers:
         try:
-            # Mengirim permintaan dengan enkripsi
             resp = requests.get(f"{node}/chain", headers={"X-Encrypted": "true"})
             if resp.status_code == 200:
                 data = decrypt_data(resp.text) if resp.headers.get("X-Encrypted", "").lower() == "true" else resp.json()
@@ -112,6 +149,8 @@ def resolve_conflicts() -> bool:
                     longest_chain = candidate_chain
         except requests.exceptions.RequestException as e:
             app.logger.error("Error connecting to node %s: %s", node, str(e))
+        except Exception as e:
+            app.logger.error("Error processing data from node %s: %s", node, str(e))
 
     if longest_chain:
         with blockchain_lock:
@@ -120,7 +159,7 @@ def resolve_conflicts() -> bool:
     return False
 
 @app.route('/new_transaction', methods=['POST'])
-def new_transaction() -> Any:
+def new_transaction() -> Response:
     """
     Menerima transaksi baru dari user.
     """
@@ -133,7 +172,7 @@ def new_transaction() -> Any:
     with blockchain_lock:
         blockchain.add_new_transaction(tx_data)
     
-    # Sebarkan transaksi ke semua node lain secara terenkripsi
+    # Sebarkan transaksi ke node lain secara terenkripsi
     msg = Message("new_transaction", tx_data).to_json()
     encrypted_msg = encrypt_data({"message": msg})
     for node in peers:
@@ -144,7 +183,7 @@ def new_transaction() -> Any:
     return jsonify({"message": "Transaction submitted successfully"}), 201
 
 @app.route('/receive_transaction', methods=['POST'])
-def receive_transaction() -> Any:
+def receive_transaction() -> Response:
     """
     Menerima transaksi yang disebarkan dari node lain.
     """
@@ -161,7 +200,7 @@ def receive_transaction() -> Any:
     return jsonify({"message": "Transaction received"}), 201
 
 @app.route('/mine', methods=['GET'])
-def mine() -> Any:
+def mine() -> Response:
     """
     Melakukan mining untuk membuat blok baru.
     """
@@ -183,7 +222,7 @@ def mine() -> Any:
         return jsonify({"error": "No transactions to mine"}), 400
 
 @app.route('/receive_block', methods=['POST'])
-def receive_block() -> Any:
+def receive_block() -> Response:
     """
     Menerima blok baru dari node lain.
     """
@@ -211,18 +250,17 @@ def receive_block() -> Any:
             return jsonify({"error": "Invalid block"}), 400
 
 @app.route('/register', methods=['POST'])
-def register_node() -> Any:
+def register_node() -> Response:
     """
     Mendaftarkan node baru ke dalam jaringan.
     Mencegah serangan Sybil dengan memerlukan 'node_secret' yang valid.
     
     Klien harus mengirimkan JSON dengan:
       - node_address: Alamat node (contoh: http://localhost:5001)
-      - node_secret: Secret key; jika tidak disediakan, akan otomatis menggunakan secret dari node ini.
+      - node_secret: Jika tidak dikirimkan, akan otomatis dianggap secret yang sama dengan node ini.
     """
     data = request.get_json()
     node_address = data.get("node_address")
-    # Jika node_secret tidak diberikan, gunakan secret yang sudah dihasilkan secara otomatis.
     node_secret = data.get("node_secret", NODE_REGISTRATION_SECRET)
     
     if not node_address:
@@ -236,7 +274,7 @@ def register_node() -> Any:
     return jsonify({'message': 'Node added', 'peers': list(peers)}), 201
 
 @app.route('/discover', methods=['GET'])
-def discover() -> Any:
+def discover() -> Response:
     """
     Discovery node: Mengembalikan daftar peer yang terdaftar.
     Endpoint ini membantu node baru menemukan node lain di jaringan.
@@ -244,30 +282,26 @@ def discover() -> Any:
     return jsonify({'peers': list(peers)}), 200
 
 @app.route('/chain', methods=['GET'])
-def get_chain_endpoint() -> Any:
+def get_chain_endpoint() -> Response:
     """
-    Mengembalikan seluruh chain blockchain.
-    Pesan dikirim dalam bentuk terenkripsi ke node yang meminta.
+    Mengembalikan seluruh chain blockchain secara terenkripsi.
     """
-    chain_data = [block.__dict__ for block in blockchain.chain]
-    payload = {"length": len(chain_data), "chain": chain_data}
-    encrypted_payload = encrypt_data(payload)
-    return encrypted_payload, 200, {"Content-Type": "text/plain", "X-Encrypted": "true"}
+    data = get_blockchain_data()
+    return get_encrypted_response(data)
 
 @app.route('/resolve', methods=['GET'])
-def consensus() -> Any:
+def consensus() -> Response:
     """
     Melakukan resolve konflik blockchain dengan mengganti chain dengan yang paling panjang.
-    Pesan dikirim dalam bentuk terenkripsi.
+    Mengembalikan status dalam bentuk terenkripsi.
     """
     replaced = resolve_conflicts()
     payload = {'message': 'Our chain was replaced'} if replaced else {'message': 'Our chain is authoritative'}
-    encrypted_payload = encrypt_data(payload)
-    return encrypted_payload, 200, {"Content-Type": "text/plain", "X-Encrypted": "true"}
+    return get_encrypted_response(payload)
 
 @app.route('/', methods=['GET'])
-def index() -> Any:
-    return "ChainKopi Node is running!", 200
+def index() -> Response:
+    return jsonify({"message": "ChainKopi Node is running!"}), 200
 
 def start_node(port: int = DEFAULT_PORT) -> None:
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)

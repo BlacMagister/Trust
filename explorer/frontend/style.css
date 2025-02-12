@@ -1,48 +1,52 @@
-async function fetchBlocks() {
-    try {
-        // Mengambil data dari endpoint /blocks
-        const response = await fetch('http://206.189.44.12:5001/blocks');
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        const data = await response.json();
-        const blocks = data.chain || [];
-        const blocksDiv = document.getElementById('blocks');
-        blocksDiv.innerHTML = ''; // Mengosongkan konten sebelumnya
-
-        // Iterasi setiap blok dan tampilkan dalam layout grid Bootstrap
-        blocks.forEach(block => {
-            const colDiv = document.createElement('div');
-            colDiv.className = 'col-md-6';
-
-            const card = document.createElement('div');
-            card.className = 'card block-card shadow-sm';
-            card.innerHTML = `
-                <div class="card-body">
-                    <h5 class="card-title">Block #${block.index}</h5>
-                    <p class="card-text"><strong>Timestamp:</strong> ${new Date(block.timestamp * 1000).toLocaleString()}</p>
-                    <p class="card-text"><strong>Hash:</strong> ${block.hash}</p>
-                    <p class="card-text"><strong>Previous Hash:</strong> ${block.previous_hash}</p>
-                    <p class="card-text"><strong>Transactions:</strong> ${JSON.stringify(block.transactions)}</p>
-                </div>
-            `;
-            colDiv.appendChild(card);
-            blocksDiv.appendChild(colDiv);
-        });
-    } catch (error) {
-        console.error('Error fetching blocks:', error);
-        const blocksDiv = document.getElementById('blocks');
-        blocksDiv.innerHTML = `
-          <div class="alert alert-danger" role="alert">
-            Error fetching blocks: ${error.message}
-          </div>
-        `;
-    }
+body {
+  background-color: #f8f9fa;
+  padding: 20px;
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
 }
 
-// Pastikan DOM telah dimuat
-document.addEventListener("DOMContentLoaded", function() {
-    fetchBlocks();
-    // Refresh data setiap 10 detik
-    setInterval(fetchBlocks, 10000);
-});
+/* Judul halaman */
+h1 {
+  margin-bottom: 30px;
+  text-align: center;
+  font-weight: bold;
+  color: #343a40;
+}
+
+/* Container untuk blok-blok */
+#blocks {
+  margin-top: 20px;
+}
+
+/* Kartu blok dengan efek bayangan dan border lembut */
+.block-card {
+  margin-bottom: 20px;
+  border: 1px solid #dee2e6;
+  border-radius: 0.25rem;
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+  background-color: #ffffff;
+}
+
+/* Efek hover untuk kartu blok */
+.block-card:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+}
+
+/* Judul kartu blok */
+.card-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #007bff;
+}
+
+/* Teks dalam kartu blok */
+.card-text {
+  font-size: 0.9rem;
+  color: #495057;
+}
+
+/* Atur tampilan alert untuk error */
+.alert {
+  margin-top: 20px;
+  font-weight: bold;
+}

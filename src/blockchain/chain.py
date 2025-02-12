@@ -1,7 +1,7 @@
 import time
 import secrets
 import logging
-from typing import List, Union
+from typing import List, Union, Dict
 
 from src.blockchain.block import Block, create_genesis_block
 from src.blockchain.consensus import validate_block
@@ -12,51 +12,84 @@ logger = logging.getLogger(__name__)
 
 class Blockchain:
     """
-    Implementasi sederhana Blockchain.
+    Implementasi Blockchain sederhana dengan dynamic difficulty adjustment dan validasi transaksi.
     """
     def __init__(self) -> None:
-        # Inisialisasi chain dengan genesis block dan list transaksi yang belum dikonfirmasi
+        # Inisialisasi chain dengan genesis block dan pool transaksi yang belum dikonfirmasi
         self.chain: List[Block] = [create_genesis_block()]
-        self.unconfirmed_transactions: List[dict] = []
+        self.unconfirmed_transactions: List[Dict] = []
+        self.difficulty: int = 2  # Tingkat kesulitan awal
+        self.target_mine_time: float = 10.0  # Target waktu mining dalam detik
+
+    def validate_transaction(self, transaction: dict) -> bool:
+        """
+        Validasi struktur dan isi transaksi sebelum ditambahkan ke blockchain.
+
+        Args:
+            transaction (dict): Transaksi yang akan divalidasi.
+
+        Returns:
+            bool: True jika transaksi valid, False jika tidak.
+        """
+        required_keys = ["sender", "recipient", "amount"]
+        for key in required_keys:
+            if key not in transaction:
+                logger.error("Validasi transaksi gagal: kunci '%s' tidak ditemukan.", key)
+                return False
+        if not isinstance(transaction["amount"], (int, float)) or transaction["amount"] < 0:
+            logger.error("Validasi transaksi gagal: jumlah (%s) tidak valid.", transaction["amount"])
+            return False
+        # Placeholder: verifikasi digital signature bisa ditambahkan di sini.
+        return True
 
     def add_new_transaction(self, transaction: dict) -> None:
         """
-        Menambahkan transaksi baru ke daftar transaksi yang belum dikonfirmasi.
-        """
-        self.unconfirmed_transactions.append(transaction)
+        Menambahkan transaksi baru ke dalam pool transaksi yang belum dikonfirmasi, setelah validasi.
 
-    def proof_of_work(self, block: Block, difficulty: int = 2) -> Block:
+        Args:
+            transaction (dict): Transaksi yang akan ditambahkan.
         """
-        Algoritma Proof-of-Work sederhana.
-        
-        Mencari nonce sehingga hash blok dimulai dengan '0' sebanyak nilai difficulty.
-        
+        if self.validate_transaction(transaction):
+            self.unconfirmed_transactions.append(transaction)
+            logger.info("Transaksi berhasil ditambahkan: %s", transaction)
+        else:
+            logger.error("Transaksi ditolak: %s", transaction)
+
+    def proof_of_work(self, block: Block) -> Block:
+        """
+        Algoritma Proof-of-Work untuk menemukan nonce yang membuat hash blok valid berdasarkan difficulty saat ini.
+
         Args:
             block (Block): Blok yang akan ditambang.
-            difficulty (int): Tingkat kesulitan mining (default 2).
-        
+
         Returns:
-            Block: Blok yang sudah memiliki nonce dan hash valid.
+            Block: Blok dengan nonce dan hash yang valid.
         """
         block.nonce = 0
         computed_hash = block.calculate_hash()
-        while not computed_hash.startswith('0' * difficulty):
+        logger.info("Mulai Proof-of-Work untuk blok %d dengan difficulty %d", block.index, self.difficulty)
+        while not computed_hash.startswith('0' * self.difficulty):
             block.nonce += 1
             computed_hash = block.calculate_hash()
+            # Logging setiap 10.000 iterasi sebagai debug
+            if block.nonce % 10000 == 0:
+                logger.debug("Nonce: %d, Hash: %s", block.nonce, computed_hash)
         block.hash = computed_hash
+        logger.info("Proof-of-Work selesai: nonce = %d, hash = %s", block.nonce, block.hash)
         return block
 
     def mine(self) -> Union[Block, bool]:
         """
         Melakukan mining blok baru berdasarkan transaksi yang belum dikonfirmasi.
-        
+
         Proses:
-        - Jika tidak ada transaksi, kembalikan False.
-        - Buat blok baru dengan index berikutnya, timestamp saat ini, daftar transaksi (copy), dan previous_hash.
-        - Lakukan proof-of-work untuk menemukan nonce yang valid.
-        - Validasi blok menggunakan fungsi validate_block.
-        - Jika valid, tambahkan ke chain dan reset daftar transaksi.
-        
+          - Jika tidak ada transaksi, kembalikan False.
+          - Buat blok baru dengan index berikutnya, timestamp saat ini, salinan transaksi, dan previous_hash.
+          - Lakukan proof-of-work dengan difficulty dinamis.
+          - Hitung waktu mining dan adjust difficulty sesuai target.
+          - Validasi blok menggunakan fungsi validate_block.
+          - Jika valid, tambahkan ke chain, reset pool transaksi, dan kembalikan blok.
+
         Returns:
             Block: Blok baru yang berhasil ditambang.
             bool: False jika tidak ada transaksi atau blok gagal divalidasi.
@@ -71,44 +104,54 @@ class Blockchain:
             timestamp=time.time(),
             transactions=self.unconfirmed_transactions.copy(),
             previous_hash=last_block.hash,
-            nonce=0  # Inisialisasi nonce
+            nonce=0
         )
 
-        # Lakukan proof-of-work untuk menemukan hash yang valid
+        start_time = time.time()
         new_block = self.proof_of_work(new_block)
+        end_time = time.time()
+        mining_time = end_time - start_time
+        logger.info("Blok %d ditambang dalam %.2f detik.", new_block.index, mining_time)
 
-        # Validasi blok dengan blok terakhir
+        # Penyesuaian difficulty secara dinamis berdasarkan waktu mining
+        if mining_time < self.target_mine_time:
+            self.difficulty += 1
+            logger.info("Mining terlalu cepat (%.2f detik). Menaikkan difficulty ke %d.", mining_time, self.difficulty)
+        elif mining_time > self.target_mine_time and self.difficulty > 1:
+            self.difficulty -= 1
+            logger.info("Mining terlalu lambat (%.2f detik). Menurunkan difficulty ke %d.", mining_time, self.difficulty)
+        else:
+            logger.info("Waktu mining optimal (%.2f detik). Difficulty tetap %d.", mining_time, self.difficulty)
+
+        # Validasi blok menggunakan blok sebelumnya
         if validate_block(new_block, last_block):
             self.chain.append(new_block)
             self.unconfirmed_transactions = []
-            logger.info(f"Blok {new_block.index} berhasil ditambang dengan nonce {new_block.nonce}.")
+            logger.info("Blok %d berhasil ditambang dan ditambahkan ke chain.", new_block.index)
             return new_block
         else:
-            logger.error("Validasi blok baru gagal.")
+            logger.error("Validasi blok %d gagal.", new_block.index)
             return False
 
     def add_block(self, block: Block) -> None:
         """
-        Menambahkan blok baru ke dalam chain.
-        Proses ini akan memperbarui field previous_hash dan hash blok.
-        
+        Menambahkan blok baru ke dalam chain dengan memperbarui previous_hash dan hash.
+
         Args:
             block (Block): Blok yang akan ditambahkan.
         """
         block.previous_hash = self.chain[-1].hash
         block.hash = block.calculate_hash()
         self.chain.append(block)
-        logger.info(f"Blok {block.index} telah ditambahkan ke chain.")
+        logger.info("Blok %d telah ditambahkan ke chain.", block.index)
 
     def is_chain_valid(self, chain: List[Block] = None) -> bool:
         """
         Memvalidasi integritas chain blockchain.
-        
-        Jika tidak ada chain yang diberikan, akan divalidasi terhadap chain milik instance.
-        
+
         Args:
-            chain (List[Block], optional): Chain yang akan divalidasi. Default None.
-        
+            chain (List[Block], optional): Chain yang akan divalidasi. Default adalah chain instance.
+
         Returns:
             bool: True jika chain valid, False jika tidak.
         """
@@ -148,7 +191,7 @@ class Blockchain:
     def last_block(self) -> Block:
         """
         Mengembalikan blok terakhir dalam chain.
-        
+
         Returns:
             Block: Blok terakhir.
         """
@@ -157,11 +200,11 @@ class Blockchain:
     def is_valid_block(self, block: Block, last_block: Block) -> bool:
         """
         Validasi sebuah blok terhadap blok sebelumnya.
-        
+
         Args:
             block (Block): Blok yang akan divalidasi.
             last_block (Block): Blok sebelumnya.
-        
+
         Returns:
             bool: True jika blok valid, False jika tidak.
         """
